@@ -211,3 +211,6 @@ __marimo__/
 
 # Chroma_DB collections
 chroma_db/
+
+# virtual environments
+venv/
