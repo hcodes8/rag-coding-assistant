@@ -56,16 +56,23 @@ class VectorStoreManager:
         Args:
             language: Language label (used to derive collection name).
             documents: List of LangChain Document objects (chunked).
+        
+        Raises:
+            ValueError: If documents is empty.
         """
+        if not documents:
+            raise ValueError(
+                f"Cannot ingest an empty document list for '{language}'. "
+            )
         name = collection_name_for(language)
 
         # Delete collection if it exists
         if self.collection_exists(language):
             logger.info("Deleting existing collection '%s' before re-ingest", name)
             self._chroma_client.delete_collection(name)
-            # Remove from cache too
-            self._stores.pop(name, None)
-
+        
+        # Remove from cache
+        self._stores.pop(name, None)
         logger.info("Ingesting %d chunks into collection '%s'", len(documents), name)
 
         # Chroma.from_documents creates the collection and adds all documents
