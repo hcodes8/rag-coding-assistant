@@ -24,12 +24,12 @@ OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "mistralai/mistral-7b-instruct")
 LLM_TEMPERATURE: float = 0.1 # Lower temp = more factual
-LLM_MAX_TOKENS: int = 1024 # Max tokens per answer
+LLM_MAX_TOKENS: int = 4096 # Max tokens per answer
 
 # Chunking
 CHUNK_SIZE: int = 800 # character count per chunk
 CHUNK_OVERLAP: int = 150 # characters shared between adjacent chunks
-RETRIEVAL_K: int = 5 # chunks received per query
+RETRIEVAL_K: int = 8 # chunks received per query
 
 # ChromaDB
 def collection_name_for(language: str) -> str:
@@ -37,7 +37,7 @@ def collection_name_for(language: str) -> str:
     return language.strip().lower().replace(" ", "_")
 
 # GUI
-APP_TITLE: str = "DevDocs RAG Chatbot"
+APP_TITLE: str = "RAG Coding Assistant"
 WINDOW_SIZE: str = "900x700"
 FONT_FAMILY: str = "Consolas"
 FONT_SIZE: int = 11

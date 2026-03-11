@@ -149,3 +149,33 @@ class RAGPipeline:
             )
 
         return answer
+
+    def ask_stream(self, question: str):
+        if self._chain is None or self._current_language is None:
+            raise RuntimeError("No language selected. Call set_language() first.")
+        if not question.strip():
+            yield "Please enter a question."
+            return
+
+        logger.debug("Streaming ask [%s]: %s", self._current_language, question)
+
+        try:
+            # Build a streaming chain without StrOutputParser
+            retriever = self._vs_manager.get_retriever(self._current_language)
+            stream_chain = (
+                RunnableParallel(
+                    {
+                        "context": retriever | _format_docs,
+                        "question": RunnablePassthrough(),
+                    }
+                )
+                | _PROMPT
+                | self._llm  # stream directly from LLM, skip StrOutputParser
+            )
+            for chunk in stream_chain.stream(question):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    yield token
+        except Exception as exc:
+            logger.error("LLM streaming call failed: %s", exc)
+            yield f"\nError: {exc}\n"

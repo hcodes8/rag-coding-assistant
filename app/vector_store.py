@@ -118,13 +118,17 @@ class VectorStoreManager:
             )
 
         store = self._stores[name]
-
         # MMR retriever: fetch_k candidates -> k
         return store.as_retriever(
             search_type="mmr",
             search_kwargs={"k": k, "fetch_k": k * 3},
         )
-
+        """
+        return store.as_retriever(
+            search_type="similarity",  # > mmr
+            search_kwargs={"k": k},
+        )
+        """
     def list_ingested_languages(self) -> list[str]:
         """Return language names (collection names) that are already embedded."""
         return [c.name for c in self._chroma_client.list_collections()]
