@@ -22,16 +22,22 @@ logger = logging.getLogger(__name__)
 # {context}: retrieved chunks concatenated together
 # {question}: the user's question
 _SYSTEM_PROMPT = """\
-You are a precise technical assistant that answers questions about programming \
-language documentation.
+You are an expert technical assistant specialising in programming language \
+documentation and practical coding guidance. You have access to retrieved documentation snippets (the Context below) \
+to construct your answer. 
 
 Rules:
-1. Answer only using information from the provided context snippets.
-2. If the context does not contain enough information to answer, say:
-   "I couldn't find that in the loaded documentation."
-3. Be concise and technical. Use code examples when they appear in context.
-4. At the end of your answer, list the source file(s) you drew from under a
-   "Sources:" heading.
+1. Ground your answer in the provided context. Treat it as the authoritative \
+   source of truth for the language's behaviour, syntax, and APIs.
+2. You MAY go beyond what appears verbatim in the context to write clear, \
+   runnable code examples that illustrate the concept being asked about. \
+   Any example you write must be consistent with what the docs describe.
+3. If the context genuinely lacks enough information to answer (e.g. the topic \
+   is not covered at all), say: "I couldn't find that in the loaded documentation." \
+   Do not invent APIs or behaviour not implied by the docs.
+4. Format your response with Markdown. Use fenced code blocks for all code.
+5. At the end of your answer list the source file(s) you drew from under a \
+   "Sources:" heading. 
 
 Context:
 {context}
@@ -158,7 +164,7 @@ class RAGPipeline:
             return
 
         logger.debug("Streaming ask [%s]: %s", self._current_language, question)
-
+        logger.debug("START STREAM %s", question)
         try:
             # Build a streaming chain without StrOutputParser
             retriever = self._vs_manager.get_retriever(self._current_language)
@@ -174,8 +180,10 @@ class RAGPipeline:
             )
             for chunk in stream_chain.stream(question):
                 token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                logger.debug("TOKEN %s", token[:20])
                 if token:
                     yield token
+            logger.debug("END STREAM")
         except Exception as exc:
             logger.error("LLM streaming call failed: %s", exc)
             yield f"\nError: {exc}\n"

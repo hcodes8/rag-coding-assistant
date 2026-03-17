@@ -32,6 +32,7 @@ def main() -> None:
     from app.vector_store import VectorStoreManager
     from app.rag_pipeline import RAGPipeline
     from app.server import run_server
+    from app.gui import launch_gui 
 
     HOST = "127.0.0.1"
     PORT = 5000
@@ -41,17 +42,20 @@ def main() -> None:
     pipeline   = RAGPipeline(vs_manager)
     logger.info("Backend ready. Starting web server on http://%s:%d", HOST, PORT)
 
-    # Open browser after a short delay so server is up
-    def _open_browser():
-        time.sleep(1.2)
-        webbrowser.open(f"http://{HOST}:{PORT}")
-
-    threading.Thread(target=_open_browser, daemon=True).start()
-
-    # Blocks here — Ctrl+C to stop
-    run_server(vs_manager, pipeline, host=HOST, port=PORT)
+    # Open browser after a short delay so server is active
+    server_thread = threading.Thread(
+        target=run_server,
+        args=(vs_manager, pipeline),
+        kwargs={"host": HOST, "port": PORT},
+        daemon=True,
+    )
+    server_thread.start()
+    time.sleep(1.2)
+    # Blocks here until the window is closed
+    launch_gui(port=PORT)
 
     logger.info("Application closed")
+
 
 
 if __name__ == "__main__":
