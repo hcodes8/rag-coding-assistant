@@ -74,15 +74,15 @@ class RAGPipeline:
         self._current_language: str | None = None
         self._chain: Any | None = None  # built lazily when language is set
 
-        # LLM client
-        # set request_timeout to avoid hanging the GUI thread
+        self._stream_chain: Any | None = None
+
         self._llm = ChatOpenAI(
             model=LLM_MODEL_NAME,
             temperature=LLM_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
-            openai_api_key=OPENROUTER_API_KEY,
-            openai_api_base=OPENROUTER_BASE_URL,
-            request_timeout=60,
+            api_key=OPENROUTER_API_KEY,
+            base_url=OPENROUTER_BASE_URL,
+            timeout=60,
         )
 
     @property
@@ -105,11 +105,7 @@ class RAGPipeline:
         logger.info("Setting active language to '%s'", language)
         retriever = self._vs_manager.get_retriever(language)
 
-        # RunnableParallel runs both branches with the same input dict:
-        # "context": retriever fetches docs → _format_docs joins them
-        # "question": passed through unchanged
-        # Then pipes to _PROMPT -> LLM -> output string parser.
-        self._chain = (
+        base = (
             RunnableParallel(
                 {
                     "context": retriever | _format_docs,
@@ -118,8 +114,9 @@ class RAGPipeline:
             )
             | _PROMPT
             | self._llm
-            | StrOutputParser()
         )
+        self._stream_chain = base
+        self._chain = base | StrOutputParser()
 
         self._current_language = language
         logger.info("RAG chain ready for '%s'", language)
@@ -157,33 +154,18 @@ class RAGPipeline:
         return answer
 
     def ask_stream(self, question: str):
-        if self._chain is None or self._current_language is None:
+        if self._stream_chain is None or self._current_language is None:
             raise RuntimeError("No language selected. Call set_language() first.")
         if not question.strip():
             yield "Please enter a question."
             return
 
         logger.debug("Streaming ask [%s]: %s", self._current_language, question)
-        logger.debug("START STREAM %s", question)
         try:
-            # Build a streaming chain without StrOutputParser
-            retriever = self._vs_manager.get_retriever(self._current_language)
-            stream_chain = (
-                RunnableParallel(
-                    {
-                        "context": retriever | _format_docs,
-                        "question": RunnablePassthrough(),
-                    }
-                )
-                | _PROMPT
-                | self._llm  # stream directly from LLM, skip StrOutputParser
-            )
-            for chunk in stream_chain.stream(question):
+            for chunk in self._stream_chain.stream(question):
                 token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                logger.debug("TOKEN %s", token[:20])
                 if token:
                     yield token
-            logger.debug("END STREAM")
         except Exception as exc:
             logger.error("LLM streaming call failed: %s", exc)
             yield f"\nError: {exc}\n"
