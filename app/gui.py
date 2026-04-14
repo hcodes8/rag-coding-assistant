@@ -1,34 +1,27 @@
-import webview
-import threading
-from pathlib import Path
+from typing import Callable, Optional
 
-def launch_gui(port: int = 5000, block: bool = True):
+import webview
+
+
+def launch_gui(url: str, on_closed: Optional[Callable[[], None]] = None) -> None:
     """
-    Open the desktop GUI window.
- 
-    Parameters:
-    port: Port your FastAPI server is running on (default 5000).
-    block: bool  If True (default) this call blocks until the window closes.
-    Pass False to open the window in a background thread.
+    Open the desktop GUI window pointed at the given URL and block until
+    the user closes it. If `on_closed` is provided, it is invoked when the
+    window is closed so the caller can shut the backend down cleanly.
     """
-    file_url = (Path(__file__).parent / "index.html").resolve().as_uri()
-    def _open():
-        window = webview.create_window(
-            title="RAG Coding Assistant",
-            url=file_url,
-            width=1080,
-            height=700,
-            min_size=(720, 480),
-            frameless=False,
-            easy_drag=False,
-        )
-        webview.start(debug=False, http_server=True)
- 
-    if block:
-        _open()
-    else:
-        t = threading.Thread(target=_open, daemon=True)
-        t.start()
- 
+    window = webview.create_window(
+        title="RAG Coding Assistant",
+        url=url,
+        width=1080,
+        height=700,
+        min_size=(720, 480),
+        frameless=False,
+        easy_drag=False,
+    )
+    if on_closed is not None:
+        window.events.closed += on_closed
+    webview.start(debug=False)
+
+
 if __name__ == "__main__":
-    launch_gui()
+    launch_gui(url="http://127.0.0.1:5000/ui")
