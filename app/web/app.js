@@ -1,8 +1,9 @@
-const BASE = 'http://127.0.0.1:5000';
+const BASE = window.location.protocol === 'file:' ? 'http://127.0.0.1:5000' : '';
 let activeLanguage = null;
 let isStreaming = false;
 
 const $ = id => document.getElementById(id);
+
 function setStatus(state, label) {
     const dot = $('status-dot');
     dot.className = '';
@@ -28,27 +29,37 @@ function addMessage(role, text) {
     const div = document.createElement('div');
     div.className = `msg ${role}`;
 
-    const renderedContent = role === 'assistant'
-        ? renderMarkdown(text)
-        : escHtml(text);
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = `${role === 'user' ? 'You' : 'Assistant'} · ${now}`;
 
-    div.innerHTML = `
-      <div class="msg-meta">${role === 'user' ? 'You' : 'Assistant'} · ${now}</div>
-      <div class="msg-bubble">${renderedContent}</div>
-      <button class="msg-copy" onclick="copyMessage(this, ${JSON.stringify(text)})">copy</button>
-    `;
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    if (role === 'assistant') {
+        bubble.innerHTML = renderMarkdown(text);
+    } else {
+        bubble.textContent = text;
+    }
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-copy';
+    copyBtn.textContent = 'copy';
+    copyBtn.addEventListener('click', () => copyToClipboard(text, copyBtn));
+
+    div.appendChild(meta);
+    div.appendChild(bubble);
+    div.appendChild(copyBtn);
     $('messages').appendChild(div);
     scrollBottom();
-    return div.querySelector('.msg-bubble');
+    return bubble;
 }
 
 function escHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// MArkdown Rendering
+// Markdown Rendering
 function renderMarkdown(raw) {
-    // Extract fenced code blocks into placeholders so inner content is safe
     const codeBlocks = [];
     let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
         const idx = codeBlocks.length;
@@ -56,13 +67,11 @@ function renderMarkdown(raw) {
         return `\x00CODE${idx}\x00`;
     });
 
-    // Escape remaining HTML
     s = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    // Block-level: headings, blockquotes, HR, lists, paragraphs
     const lines = s.split('\n');
     const out = [];
-    let listStack = [];   // tracks open ul/ol
+    let listStack = [];
 
     function closeLists() {
         while (listStack.length) { out.push(`</${listStack.pop()}>`); }
@@ -71,7 +80,6 @@ function renderMarkdown(raw) {
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
 
-        // Code block placeholder
         if (/^\x00CODE\d+\x00$/.test(line.trim())) {
             closeLists();
             const idx = parseInt(line.trim().match(/\d+/)[0]);
@@ -84,12 +92,10 @@ function renderMarkdown(raw) {
             continue;
         }
 
-        // HR
         if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
             closeLists(); out.push('<hr>'); continue;
         }
 
-        // Headings
         const h = line.match(/^(#{1,3})\s+(.*)/);
         if (h) {
             closeLists();
@@ -98,14 +104,12 @@ function renderMarkdown(raw) {
             continue;
         }
 
-        // Blockquote
         if (/^>\s?/.test(line)) {
             closeLists();
             out.push(`<blockquote>${inlineMarkdown(line.replace(/^>\s?/, ''))}</blockquote>`);
             continue;
         }
 
-        // Unordered list
         const ul = line.match(/^(\s*)[*\-+]\s+(.*)/);
         if (ul) {
             if (!listStack.length || listStack[listStack.length - 1] !== 'ul') {
@@ -115,7 +119,6 @@ function renderMarkdown(raw) {
             continue;
         }
 
-        // Ordered list
         const ol = line.match(/^(\s*)\d+\.\s+(.*)/);
         if (ol) {
             if (!listStack.length || listStack[listStack.length - 1] !== 'ol') {
@@ -125,7 +128,6 @@ function renderMarkdown(raw) {
             continue;
         }
 
-        // Blank line
         if (line.trim() === '') {
             closeLists(); out.push(''); continue;
         }
@@ -134,7 +136,6 @@ function renderMarkdown(raw) {
     }
     closeLists();
 
-    // Wrap consecutive non-empty non-block lines into <p> tags
     const html = out.join('\n')
         .replace(/(^|\n)(?!<[hup\x00]|<ol|<bl|<hr|<pre|<blockquote)([^\n]+)/g, (m, pre, content) => {
             if (!content.trim()) return m;
@@ -145,36 +146,27 @@ function renderMarkdown(raw) {
 }
 
 function inlineMarkdown(s) {
-    // Bold **text** or __text__
     s = s.replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => `<strong>${a || b}</strong>`);
-    // Italic *text* or _text_ (not inside words for _)
     s = s.replace(/\*(.+?)\*/g, (_, a) => `<em>${a}</em>`);
     s = s.replace(/(?<!\w)_(.+?)_(?!\w)/g, (_, a) => `<em>${a}</em>`);
-    // Inline code `code`
     s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
     return s;
 }
 
-// Copy Function Helpers
 function copyCode(btn) {
     const code = btn.nextElementSibling.textContent;
     copyToClipboard(code, btn);
 }
 
-function copyMessage(btn, text) {
-    copyToClipboard(text, btn);
-}
-
 function copyToClipboard(text, btn) {
     navigator.clipboard.writeText(text).then(() => {
         const orig = btn.textContent;
-        btn.textContent = '✓ copied';
+        btn.textContent = 'copied';
         btn.classList.add('copied');
         setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1800);
     });
 }
 
-// Language Loading Functions
 async function loadLanguages() {
     try {
         const r = await fetch(`${BASE}/api/languages`);
@@ -194,7 +186,7 @@ function renderLanguages(langs) {
         const btn = document.createElement('button');
         btn.className = 'lang-btn';
         btn.dataset.lang = lang;
-        btn.innerHTML = `<span class="dot"></span>${lang}`;
+        btn.innerHTML = `<span class="dot"></span>${escHtml(lang)}`;
         btn.addEventListener('click', () => activateLanguage(lang, btn));
         list.appendChild(btn);
     });
@@ -205,20 +197,19 @@ async function activateLanguage(lang, btn) {
     document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('loading-lang');
     const origHtml = btn.innerHTML;
-    btn.innerHTML = `<span class="spinner"></span>${lang}`;
+    btn.innerHTML = `<span class="spinner"></span>${escHtml(lang)}`;
     setStatus('loading', `loading ${lang}…`);
 
     try {
-        const r = await fetch(`${BASE}/api/activate`, {
+        await fetch(`${BASE}/api/activate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ language: lang })
         });
-        const d = await r.json();
         activeLanguage = lang;
         btn.classList.remove('loading-lang');
         btn.classList.add('active');
-        btn.innerHTML = `<span class="dot"></span>${lang}`;
+        btn.innerHTML = `<span class="dot"></span>${escHtml(lang)}`;
         setStatus('ready', `${lang} · ready`);
         $('send-btn').disabled = false;
         $('no-lang-warning').style.display = 'none';
@@ -250,11 +241,6 @@ async function pollStatus() {
     }
 }
 
-async function pingServer() {
-    try { await fetch(`${BASE}/api/ping`, { method: 'POST' }); } catch { }
-}
-
-// Ask stream 
 async function sendQuestion() {
     const input = $('question-input');
     const question = input.value.trim();
@@ -271,21 +257,24 @@ async function sendQuestion() {
 
     addMessage('user', question);
 
-    // Assistant bubble with streaming cursor
     const empty = $('empty-state');
     if (empty) empty.remove();
     const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const aDiv = document.createElement('div');
     aDiv.className = 'msg assistant';
-    aDiv.innerHTML = `
-      <div class="msg-meta">Assistant · ${now}</div>
-      <div class="msg-bubble"><span class="cursor"></span></div>
-    `;
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = `Assistant · ${now}`;
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.innerHTML = '<span class="cursor"></span>';
+    aDiv.appendChild(meta);
+    aDiv.appendChild(bubble);
     $('messages').appendChild(aDiv);
-    const bubble = aDiv.querySelector('.msg-bubble');
     scrollBottom();
 
     let fullText = '';
+    let done = false;
 
     try {
         const response = await fetch(`${BASE}/api/ask`, {
@@ -298,9 +287,9 @@ async function sendQuestion() {
         const decoder = new TextDecoder();
         let buffer = '';
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        while (!done) {
+            const { done: readerDone, value } = await reader.read();
+            if (readerDone) break;
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop();
@@ -308,11 +297,10 @@ async function sendQuestion() {
             for (const line of lines) {
                 if (!line.startsWith('data:')) continue;
                 const raw = line.slice(5).trim();
-                if (raw === '[DONE]') break;
+                if (raw === '[DONE]') { done = true; break; }
                 try {
                     const obj = JSON.parse(raw);
                     fullText += obj.token;
-                    // Render markdown during streaming, keep blinking cursor at end
                     bubble.innerHTML = renderMarkdown(fullText) + '<span class="cursor"></span>';
                     scrollBottom();
                 } catch { }
@@ -322,19 +310,17 @@ async function sendQuestion() {
         fullText = 'Error: could not reach server.';
     }
 
-    // render clean markdown, remove cursor, add copy button
     bubble.innerHTML = renderMarkdown(fullText);
     const copyBtn = document.createElement('button');
     copyBtn.className = 'msg-copy';
     copyBtn.textContent = 'copy';
-    copyBtn.onclick = () => copyMessage(copyBtn, fullText);
+    copyBtn.addEventListener('click', () => copyToClipboard(fullText, copyBtn));
     aDiv.appendChild(copyBtn);
     isStreaming = false;
     $('send-btn').disabled = false;
     scrollBottom();
 }
 
-// Input Events
 const ta = $('question-input');
 ta.addEventListener('input', () => autoResize(ta));
 ta.addEventListener('keydown', e => {
@@ -345,6 +331,4 @@ ta.addEventListener('keydown', e => {
 });
 $('send-btn').addEventListener('click', sendQuestion);
 
-// Boot
 loadLanguages();
-setInterval(pingServer, 5000);
