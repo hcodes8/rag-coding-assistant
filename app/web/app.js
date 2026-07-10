@@ -58,99 +58,20 @@ function escHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Markdown Rendering
+// Markdown rendering: marked.js for parsing, DOMPurify to sanitise the
+// resulting HTML (the LLM output is untrusted input).
 function renderMarkdown(raw) {
-    const codeBlocks = [];
-    let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-        const idx = codeBlocks.length;
-        codeBlocks.push({ lang: lang || '', code });
-        return `\x00CODE${idx}\x00`;
+    const html = DOMPurify.sanitize(marked.parse(raw));
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    tpl.content.querySelectorAll('pre').forEach(pre => {
+        const btn = document.createElement('button');
+        btn.className = 'pre-copy';
+        btn.setAttribute('onclick', 'copyCode(this)');
+        btn.textContent = 'copy';
+        pre.prepend(btn);
     });
-
-    s = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    const lines = s.split('\n');
-    const out = [];
-    let listStack = [];
-
-    function closeLists() {
-        while (listStack.length) { out.push(`</${listStack.pop()}>`); }
-    }
-
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-
-        if (/^\x00CODE\d+\x00$/.test(line.trim())) {
-            closeLists();
-            const idx = parseInt(line.trim().match(/\d+/)[0]);
-            const { lang, code } = codeBlocks[idx];
-            const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            out.push(
-                `<pre><button class="pre-copy" onclick="copyCode(this)">copy</button>` +
-                `<code class="language-${escHtml(lang)}">${escaped}</code></pre>`
-            );
-            continue;
-        }
-
-        if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
-            closeLists(); out.push('<hr>'); continue;
-        }
-
-        const h = line.match(/^(#{1,3})\s+(.*)/);
-        if (h) {
-            closeLists();
-            const lvl = h[1].length;
-            out.push(`<h${lvl}>${inlineMarkdown(h[2])}</h${lvl}>`);
-            continue;
-        }
-
-        if (/^>\s?/.test(line)) {
-            closeLists();
-            out.push(`<blockquote>${inlineMarkdown(line.replace(/^>\s?/, ''))}</blockquote>`);
-            continue;
-        }
-
-        const ul = line.match(/^(\s*)[*\-+]\s+(.*)/);
-        if (ul) {
-            if (!listStack.length || listStack[listStack.length - 1] !== 'ul') {
-                closeLists(); out.push('<ul>'); listStack.push('ul');
-            }
-            out.push(`<li>${inlineMarkdown(ul[2])}</li>`);
-            continue;
-        }
-
-        const ol = line.match(/^(\s*)\d+\.\s+(.*)/);
-        if (ol) {
-            if (!listStack.length || listStack[listStack.length - 1] !== 'ol') {
-                closeLists(); out.push('<ol>'); listStack.push('ol');
-            }
-            out.push(`<li>${inlineMarkdown(ol[2])}</li>`);
-            continue;
-        }
-
-        if (line.trim() === '') {
-            closeLists(); out.push(''); continue;
-        }
-        closeLists();
-        out.push(inlineMarkdown(line));
-    }
-    closeLists();
-
-    const html = out.join('\n')
-        .replace(/(^|\n)(?!<[hup\x00]|<ol|<bl|<hr|<pre|<blockquote)([^\n]+)/g, (m, pre, content) => {
-            if (!content.trim()) return m;
-            return `${pre}<p>${content}</p>`;
-        });
-
-    return html;
-}
-
-function inlineMarkdown(s) {
-    s = s.replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a, b) => `<strong>${a || b}</strong>`);
-    s = s.replace(/\*(.+?)\*/g, (_, a) => `<em>${a}</em>`);
-    s = s.replace(/(?<!\w)_(.+?)_(?!\w)/g, (_, a) => `<em>${a}</em>`);
-    s = s.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
-    return s;
+    return tpl.innerHTML;
 }
 
 function copyCode(btn) {

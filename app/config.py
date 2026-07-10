@@ -27,7 +27,7 @@ EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
 
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "mistralai/mistral-7b-instruct")
+LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "qwen/qwen3-next-80b-a3b-instruct:free")
 LLM_TEMPERATURE: float = 0.4
 LLM_MAX_TOKENS: int = 4096
 
