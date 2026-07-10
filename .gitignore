@@ -212,5 +212,11 @@ __marimo__/
 # Chroma_DB collections
 chroma_db/
 
+# Ingested documentation trees (fetched locally, not committed)
+docs/
+
+# Log files
+*.log
+
 # virtual environments
 venv/
