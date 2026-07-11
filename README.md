@@ -43,6 +43,8 @@ To add a language that isn't built in, register it in the `SOURCES` dict at the 
 
 Then fetch and index it the same way: `python scripts/fetch_docs.py typescript --ingest`. Non-text files are skipped automatically, and the new language shows up in the sidebar on next launch.
 
+To add your own language, create `docs/<name>/` and drop `.txt`, `.md`, or `.rst` files inside — every subfolder of `docs/` becomes selectable in the UI.
+
 ### Run
 
 ```bash
