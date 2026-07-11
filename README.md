@@ -29,9 +29,9 @@ copy .env.example .env       # then paste your OpenRouter key into .env
 python scripts/fetch_docs.py all --ingest
 ```
 
-This downloads doc sets (official Python docs, the Rust book, go.dev docs, javascript.info) and pre-builds the search index so the app is ready instantly. Embedding is a one-time, CPU-bound step — about a minute per couple thousand chunks; the full Python docs are the big one at roughly 10 minutes. Run `--list` to see sources, or pass specific names (`python scripts/fetch_docs.py rust go`). Skip `--ingest` and the app will index a language the first time you select it instead.
+This downloads doc sets (official Python docs, the Rust book, go.dev docs, javascript.info) and pre-builds the search index so the app is ready instantly. Embedding is a one-time, CPU-bound step (about a minute per couple thousand chunks). Run `--list` to see sources, or pass specific names (`python scripts/fetch_docs.py rust go`). Skip `--ingest` and the app will index a language the first time you select it instead.
 
-To add a language that isn't built in, register it in the `SOURCES` dict at the top of `scripts/fetch_docs.py`. Any zip of `.txt`/`.md`/`.rst` files works, and every GitHub repo is one — lots of official docs are markdown repos:
+To add a language that isn't built in, register it in the `SOURCES` dict at the top of `scripts/fetch_docs.py`. Any zip of `.txt`/`.md`/`.rst` files works. An example is shown below. 
 
 ```python
 "typescript": Source(
@@ -43,7 +43,7 @@ To add a language that isn't built in, register it in the `SOURCES` dict at the 
 
 Then fetch and index it the same way: `python scripts/fetch_docs.py typescript --ingest`. Non-text files are skipped automatically, and the new language shows up in the sidebar on next launch.
 
-To add your own language, create `docs/<name>/` and drop `.txt`, `.md`, or `.rst` files inside — every subfolder of `docs/` becomes selectable in the UI.
+To add your own language, create `docs/<name>/` and drop `.txt`, `.md`, or `.rst` files inside. Every subfolder of `docs/` becomes selectable in the UI.
 
 ### Run
 
