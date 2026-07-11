@@ -38,7 +38,11 @@ RETRIEVAL_K: int = 8
 
 def collection_name_for(language: str) -> str:
     """Normalise a language label into a valid ChromaDB collection name."""
-    return language.strip().lower().replace(" ", "_")
+    name = language.strip().lower().replace(" ", "_")
+    # ChromaDB requires names of 3+ characters; pad short ones (e.g. "go", "c")
+    if len(name) < 3:
+        name = f"{name}-docs"
+    return name
 
 
 APP_TITLE: str = "RAG Coding Assistant"
