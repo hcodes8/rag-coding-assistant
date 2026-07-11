@@ -25,4 +25,14 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
-        run: pytest -q
+        run: |
+          set -o pipefail
+          pytest -q 2>&1 | tee pytest.log
+
+      # failing output becomes annotations, visible without downloading logs
+      - name: Surface failures
+        if: failure()
+        run: |
+          tail -n 30 pytest.log | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::${line}"
+          done
