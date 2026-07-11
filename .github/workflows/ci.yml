@@ -29,10 +29,10 @@ jobs:
           set -o pipefail
           pytest -q 2>&1 | tee pytest.log
 
-      # failing output becomes annotations, visible without downloading logs
+      # failing output becomes one annotation, visible without downloading logs
       - name: Surface failures
         if: failure()
         run: |
-          tail -n 30 pytest.log | while IFS= read -r line; do
-            [ -n "$line" ] && echo "::error::${line}"
-          done
+          pip show openai langchain-openai | grep -E "Name|Version" > versions.txt || true
+          msg=$(cat versions.txt pytest.log | tail -n 100 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "::error::${msg}"
