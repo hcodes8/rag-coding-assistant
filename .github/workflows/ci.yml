@@ -25,6 +25,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          # tests mock all LLM calls; the client just requires a non-empty key
+          OPENROUTER_API_KEY: dummy-key-for-ci
         run: |
           set -o pipefail
           pytest -q 2>&1 | tee pytest.log
@@ -33,6 +36,5 @@ jobs:
       - name: Surface failures
         if: failure()
         run: |
-          pip show openai langchain-openai | grep -E "Name|Version" > versions.txt || true
-          msg=$(cat versions.txt pytest.log | tail -n 100 | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-          echo "::error::${msg}"
+          { pip show openai langchain-openai 2>/dev/null | grep -E "^(Name|Version)"; tail -n 80 pytest.log; } \
+            | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g' | xargs -0 -I{} echo "::error::{}"
