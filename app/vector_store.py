@@ -2,15 +2,18 @@ from __future__ import annotations
 import logging
 from typing import Optional
 import chromadb
+from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from app.config import (
     CHROMA_DB_DIR,
+    EMBEDDING_BACKEND,
     EMBEDDING_MODEL_NAME,
     RETRIEVAL_K,
     collection_name_for,
 )
+from app.embeddings import HashEmbeddings
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +32,16 @@ class VectorStoreManager:
     def __init__(self) -> None:
         # HuggingFaceEmbeddings downloads the model weights on first use and
         # caches them in ~/.cache/huggingface.
-        logger.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
-        self._embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL_NAME,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        if EMBEDDING_BACKEND == "hash":
+            logger.info("Using deterministic hash embeddings")
+            self._embeddings = HashEmbeddings()
+        else:
+            logger.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
+            self._embeddings = HuggingFaceEmbeddings(
+                model_name=EMBEDDING_MODEL_NAME,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True},
+            )
 
         # Persistent ChromaDB client: no re ingestion between app sessions
         self._chroma_client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
@@ -122,6 +129,42 @@ class VectorStoreManager:
             search_type="mmr",
             search_kwargs={"k": k, "fetch_k": k * 3},
         )
+
+    def _get_store(self, language: str) -> Chroma:
+        name = collection_name_for(language)
+        if not self.collection_exists(language):
+            raise RuntimeError(
+                f"Collection for '{language}' does not exist. "
+                "Please ingest documents first."
+            )
+        if name not in self._stores:
+            self._stores[name] = Chroma(
+                collection_name=name,
+                embedding_function=self._embeddings,
+                client=self._chroma_client,
+            )
+        return self._stores[name]
+
+    def dense_search(self, language: str, query: str, k: int) -> list[tuple[Document, float]]:
+        """Return dense candidates with normalized similarity scores."""
+        store = self._get_store(language)
+        results = store.similarity_search_with_score(query, k=k)
+        return [
+            (document, 1.0 / (1.0 + max(float(distance), 0.0)))
+            for document, distance in results
+        ]
+
+    def all_documents(self, language: str) -> list[Document]:
+        """Load stored chunks for sparse indexing without re-reading source files."""
+        store = self._get_store(language)
+        payload = store.get(include=["documents", "metadatas"])
+        documents = payload.get("documents") or []
+        metadatas = payload.get("metadatas") or []
+        return [
+            Document(page_content=text, metadata=metadata or {})
+            for text, metadata in zip(documents, metadatas)
+            if text
+        ]
 
     def list_ingested_languages(self) -> list[str]:
         """Return language names (collection names) that are already embedded."""

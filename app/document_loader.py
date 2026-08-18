@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import logging
 from pathlib import Path
 from typing import List
@@ -95,9 +96,20 @@ def load_documents_for_language(language: str) -> List[Document]:
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
         length_function=len,
+        add_start_index=True,
     )
 
     chunked_docs = splitter.split_documents(raw_docs)
+    source_indexes: dict[str, int] = {}
+    for doc in chunked_docs:
+        source = str(doc.metadata.get("source", "unknown"))
+        chunk_index = source_indexes.get(source, 0)
+        source_indexes[source] = chunk_index + 1
+        identity = (
+            f"{source}:{doc.metadata.get('start_index', 0)}:{doc.page_content}"
+        ).encode("utf-8")
+        doc.metadata["chunk_index"] = chunk_index
+        doc.metadata["chunk_id"] = hashlib.sha1(identity).hexdigest()[:16]
     logger.info(
         "Split %d raw doc(s) into %d chunk(s) for '%s'",
         len(raw_docs),
