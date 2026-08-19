@@ -30,8 +30,15 @@ def create_app(vs_manager, pipeline) -> FastAPI:
     )
 
     @app.get("/")
+    async def serve_root():
+        return FileResponse(WEB_DIR / "index.html")
+
+    @app.get("/health")
     async def health():
-        return {"status": "alive"}
+        return {
+            "status": "healthy",
+            "ready": pipeline.current_language is not None,
+        }
 
     @app.get("/ui")
     async def serve_index():
@@ -60,6 +67,14 @@ def create_app(vs_manager, pipeline) -> FastAPI:
             "ready": pipeline.current_language is not None,
         }
 
+    @app.get("/api/observability/summary")
+    async def observability_summary():
+        return pipeline.trace_store.summary()
+
+    @app.get("/api/observability/traces")
+    async def observability_traces(limit: int = 25):
+        return {"traces": pipeline.trace_store.recent(limit=limit)}
+
     class ActivateRequest(BaseModel):
         language: str
 
@@ -83,6 +98,7 @@ def create_app(vs_manager, pipeline) -> FastAPI:
                 from app.document_loader import load_documents_for_language
                 docs = load_documents_for_language(language)
                 vs_manager.ingest(language, docs)
+                pipeline.invalidate_language(language)
                 pipeline.set_language(language)
                 return len(docs)
 
@@ -108,11 +124,12 @@ def create_app(vs_manager, pipeline) -> FastAPI:
 
                 def _run():
                     try:
-                        for token in pipeline.ask_stream(question):
-                            loop.call_soon_threadsafe(queue.put_nowait, token)
+                        for event in pipeline.ask_stream_events(question):
+                            loop.call_soon_threadsafe(queue.put_nowait, event)
                     except Exception as exc:
                         loop.call_soon_threadsafe(
-                            queue.put_nowait, f"\n\nError: {exc}"
+                            queue.put_nowait,
+                            {"type": "token", "token": f"\n\nError: {exc}"},
                         )
                     finally:
                         loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -122,7 +139,7 @@ def create_app(vs_manager, pipeline) -> FastAPI:
                     token = await queue.get()
                     if token is None:
                         break
-                    yield f"data: {json.dumps({'token': token})}\n\n"
+                    yield f"data: {json.dumps(token)}\n\n"
                 yield "data: [DONE]\n\n"
 
         return StreamingResponse(

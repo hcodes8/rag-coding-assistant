@@ -94,3 +94,19 @@ class TestRAGPipelineAsk:
         result = pipeline.ask("What is a generator?")
         assert "error" in result.lower()
         assert "API timeout" in result
+
+
+def test_demo_answer_abstains_when_relevance_is_low():
+    from app.rag_pipeline import RAGPipeline
+    from app.retrieval import RetrievalResult, RetrievedChunk
+
+    chunk = RetrievedChunk(
+        document=Document(
+            page_content="Unrelated documentation.",
+            metadata={"source": "python/other.md"},
+        ),
+        score=0.1,
+        rerank_score=0.1,
+    )
+    retrieval = RetrievalResult([chunk], retrieval_ms=1, rerank_ms=1)
+    assert "couldn't find" in RAGPipeline._demo_answer("unknown API", retrieval)

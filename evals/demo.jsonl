@@ -1,0 +1,3 @@
+{"id":"python-list-comprehension","language":"python","question":"What is the basic syntax of a list comprehension?","relevant_sources":["python/basics.md"],"reference_answer":"A list comprehension uses [expression for item in iterable if condition], with the condition being optional."}
+{"id":"python-context-manager","language":"python","question":"How does a context manager clean up resources?","relevant_sources":["python/context-managers.md"],"reference_answer":"The with statement calls the context manager protocol and cleanup runs when the suite exits, including after an exception."}
+{"id":"hallucination-nonexistent-api","language":"python","question":"How do I use Python's quantum_compile_everything API?","relevant_sources":[],"should_abstain":true}

@@ -1,177 +1,306 @@
 from __future__ import annotations
+
 import logging
-from typing import Any
+import time
+from typing import Any, Iterator
+
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_openai import ChatOpenAI
 
 from app.config import (
+    DEMO_MIN_RELEVANCE,
+    DEMO_MODE,
     LLM_MAX_TOKENS,
     LLM_MODEL_NAME,
     LLM_TEMPERATURE,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
 )
+from app.evaluation.metrics import evaluate_answer
+from app.observability import (
+    TraceRecord,
+    TraceStore,
+    calculate_cost,
+    estimate_tokens,
+    extract_token_usage,
+)
+from app.retrieval import HybridRetriever, RetrievalResult
 from app.vector_store import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
-
-# Prompt
-# {context}: retrieved chunks concatenated together
-# {question}: the user's question
 _SYSTEM_PROMPT = """\
-You are an expert technical assistant specialising in programming language \
-documentation and practical coding guidance. You have access to retrieved documentation snippets (the Context below) \
-to construct your answer. 
+You are an expert technical assistant specialising in programming language
+documentation and practical coding guidance. Use the retrieved Context below.
 
 Rules:
-1. Ground your answer in the provided context. Treat it as the authoritative \
-   source of truth for the language's behaviour, syntax, and APIs.
-2. You MAY go beyond what appears verbatim in the context to write clear, \
-   runnable code examples that illustrate the concept being asked about. \
-   Any example you write must be consistent with what the docs describe.
-3. If the context genuinely lacks enough information to answer (e.g. the topic \
-   is not covered at all), say: "I couldn't find that in the loaded documentation." \
-   Do not invent APIs or behaviour not implied by the docs.
-4. Be thorough. Explain the concept in depth, show at least one complete, \
-   runnable code example, and mention important caveats, edge cases, or \
-   closely related APIs covered by the context. Prefer a detailed answer \
-   over a brief one.
-5. Format your response with Markdown. Use fenced code blocks for all code, \
-   and wrap inline identifiers, operators, and expressions (e.g. `**kwargs`, \
-   `2**3`, `__init__`) in backticks so they render literally.
-6. At the end of your answer list the source file(s) you drew from under a \
-   "Sources:" heading.
+1. Ground every factual claim in the Context. Treat it as authoritative.
+2. You may write examples, but they must be consistent with the Context.
+3. If the Context lacks enough information, say exactly: "I couldn't find that
+   in the loaded documentation." Do not fill gaps from model memory.
+4. Explain the answer clearly, include runnable code when useful, and mention
+   caveats supported by the Context.
+5. Use Markdown and fenced code blocks.
+6. End with a "Sources:" heading listing only source files present in Context.
 
 Context:
 {context}
 """
+_PROMPT = ChatPromptTemplate.from_messages(
+    [("system", _SYSTEM_PROMPT), ("human", "Question: {question}")]
+)
 
-_HUMAN_PROMPT = "Question: {question}"
 
-_PROMPT = ChatPromptTemplate.from_messages([("system", _SYSTEM_PROMPT),("human", _HUMAN_PROMPT),])
+def _format_docs(chunks: list) -> str:
+    return "\n\n---\n\n".join(
+        f"[Source: {item.document.metadata.get('source', 'unknown')}]\n"
+        f"{item.document.page_content}"
+        for item in chunks
+    )
 
-def _format_docs(docs: list) -> str:
-    """
-    Concatenate retrieved Document chunks into a single context string. Each
-    chunk is separated by a divider and prefixed with its source file.
-    """
-    parts = []
-    for doc in docs:
-        source = doc.metadata.get("source", "unknown")
-        parts.append(f"[Source: {source}]\n{doc.page_content}")
-    return "\n\n---\n\n".join(parts)
+
+def _content_text(message: Any) -> str:
+    content = getattr(message, "content", message)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        )
+    return str(content)
 
 
 class RAGPipeline:
-    """
-    Encapsulates the full RAG question-answering pipeline for one language.
-
-    Usage: 
-    pipeline = RAGPipeline(vs_manager)
-    pipeline.set_language("python")
-    answer = pipeline.ask("What is a list comprehension?")
-    """
-
-    def __init__(self, vs_manager: VectorStoreManager) -> None:
+    def __init__(
+        self,
+        vs_manager: VectorStoreManager,
+        trace_store: TraceStore | None = None,
+        hybrid_retriever: HybridRetriever | None = None,
+        llm: Any | None = None,
+    ) -> None:
         self._vs_manager = vs_manager
         self._current_language: str | None = None
-        self._chain: Any | None = None  # built lazily when language is set
-
-        self._stream_chain: Any | None = None
-
-        self._llm = ChatOpenAI(
-            model=LLM_MODEL_NAME,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=LLM_MAX_TOKENS,
-            api_key=OPENROUTER_API_KEY,
-            base_url=OPENROUTER_BASE_URL,
-            timeout=60,
-        )
+        self._legacy_retriever: Any | None = None
+        self._hybrid_retriever = hybrid_retriever or HybridRetriever(vs_manager)
+        self.trace_store = trace_store or TraceStore()
+        self.last_trace: TraceRecord | None = None
+        self.last_result: dict | None = None
+        self._chain: Any | None = None  # compatibility for older integrations
+        self._demo_mode = DEMO_MODE and not OPENROUTER_API_KEY
+        self._llm = llm
+        if self._llm is None and not self._demo_mode:
+            self._llm = ChatOpenAI(
+                model=LLM_MODEL_NAME,
+                temperature=LLM_TEMPERATURE,
+                max_tokens=LLM_MAX_TOKENS,
+                api_key=OPENROUTER_API_KEY,
+                base_url=OPENROUTER_BASE_URL,
+                timeout=60,
+                stream_usage=True,
+            )
 
     @property
     def current_language(self) -> str | None:
         return self._current_language
 
     def set_language(self, language: str) -> None:
-        """
-        Switches pipeline to a different language's vector store.
-
-        Rebuilds the retrieval chain. Called whenever the user changes
-        the active language in the GUI.
-
-        Raises:
-            RuntimeError: If the language has not been ingested yet.
-        """
         if language == self._current_language:
-            return  # if language hasn't changed
-
+            return
         logger.info("Setting active language to '%s'", language)
-        retriever = self._vs_manager.get_retriever(language)
-
-        base = (
-            RunnableParallel(
-                {
-                    "context": retriever | _format_docs,
-                    "question": RunnablePassthrough(),
-                }
-            )
-            | _PROMPT
-            | self._llm
-        )
-        self._stream_chain = base
-        self._chain = base | StrOutputParser()
-
+        self._legacy_retriever = self._vs_manager.get_retriever(language)
         self._current_language = language
-        logger.info("RAG chain ready for '%s'", language)
+
+    def invalidate_language(self, language: str) -> None:
+        self._hybrid_retriever.invalidate(language)
+
+    def retrieve(self, question: str) -> RetrievalResult:
+        language = self._require_ready()
+        return self._hybrid_retriever.retrieve(question, language)
+
+    def _require_ready(self) -> str:
+        if self._current_language is None:
+            raise RuntimeError("No language selected. Call set_language() first.")
+        return self._current_language
+
+    @staticmethod
+    def _demo_answer(question: str, retrieval: RetrievalResult) -> str:
+        if (
+            not retrieval.chunks
+            or retrieval.chunks[0].rerank_score < DEMO_MIN_RELEVANCE
+        ):
+            return "I couldn't find that in the loaded documentation."
+        excerpts = []
+        for item in retrieval.chunks[:3]:
+            excerpt = " ".join(item.document.page_content.split())[:500]
+            excerpts.append(f"- {excerpt}")
+        sources = list(
+            dict.fromkeys(
+                str(item.document.metadata.get("source", "unknown"))
+                for item in retrieval.chunks
+            )
+        )
+        return (
+            "**Retrieval-only demo mode**\n\n"
+            f"The strongest documentation passages for _{question}_ are:\n\n"
+            + "\n".join(excerpts)
+            + "\n\nSources:\n"
+            + "\n".join(f"- {source}" for source in sources)
+        )
+
+    def _record_trace(
+        self,
+        *,
+        question: str,
+        retrieval: RetrievalResult,
+        answer: str,
+        started: float,
+        generation_started: float,
+        ttft_ms: float | None,
+        input_tokens: int,
+        output_tokens: int,
+        usage_estimated: bool,
+        error: str | None = None,
+    ) -> TraceRecord:
+        generation_ms = (time.perf_counter() - generation_started) * 1000
+        quality = evaluate_answer(question, answer, retrieval.chunks)
+        trace = TraceRecord(
+            question=question,
+            language=self._current_language or "unknown",
+            answer=answer,
+            strategy=retrieval.strategy,
+            sources=[item.as_dict() for item in retrieval.chunks],
+            retrieval_ms=retrieval.retrieval_ms,
+            rerank_ms=retrieval.rerank_ms,
+            generation_ms=generation_ms,
+            total_ms=(time.perf_counter() - started) * 1000,
+            ttft_ms=ttft_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=calculate_cost(input_tokens, output_tokens),
+            token_usage_estimated=usage_estimated,
+            quality=quality,
+            error=error,
+        )
+        self.trace_store.record(trace)
+        self.last_trace = trace
+        self.last_result = {
+            "answer": answer,
+            "retrieval": retrieval,
+            "trace": trace,
+        }
+        return trace
 
     def ask(self, question: str) -> str:
-        """
-        Submits a question to the active language's RAG chain.
-
-        Args:
-            question: The user's natural-language question.
-
-        Returns:
-            The LLM's answer as a string.
-
-        Raises:
-            RuntimeError: If no language has been set yet.
-        """
-        if self._chain is None or self._current_language is None:
-            raise RuntimeError("No language selected. Call set_language() first.")
-
+        language = self._require_ready()
         if not question.strip():
             return "Please enter a question."
+        if self._chain is not None:
+            try:
+                return self._chain.invoke(question)
+            except Exception as exc:
+                return f"An error occurred during the LLM call:\n{exc}"
 
-        logger.debug("Asking [%s]: %s", self._current_language, question)
-
+        started = time.perf_counter()
+        retrieval = self._hybrid_retriever.retrieve(question, language)
+        context = _format_docs(retrieval.chunks)
+        messages = _PROMPT.invoke({"context": context, "question": question}).to_messages()
+        generation_started = time.perf_counter()
+        error = None
         try:
-            answer = self._chain.invoke(question)
+            if self._demo_mode:
+                answer = self._demo_answer(question, retrieval)
+                input_tokens = estimate_tokens(context + question)
+                output_tokens = estimate_tokens(answer)
+                estimated = True
+            else:
+                response = self._llm.invoke(messages)
+                answer = _content_text(response)
+                input_tokens, output_tokens = extract_token_usage(response)
+                estimated = not (input_tokens or output_tokens)
+                if estimated:
+                    input_tokens = estimate_tokens(context + question)
+                    output_tokens = estimate_tokens(answer)
         except Exception as exc:
-            logger.error("LLM call failed: %s", exc)
-            answer = (
-                f"An error occurred during the LLM call:\n{exc}\n\n"
-                "Check your OPENROUTER_API_KEY and internet connection."
-            )
-
+            logger.exception("LLM call failed")
+            error = str(exc)
+            answer = f"An error occurred during the LLM call:\n{exc}"
+            input_tokens = estimate_tokens(context + question)
+            output_tokens = estimate_tokens(answer)
+            estimated = True
+        self._record_trace(
+            question=question,
+            retrieval=retrieval,
+            answer=answer,
+            started=started,
+            generation_started=generation_started,
+            ttft_ms=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usage_estimated=estimated,
+            error=error,
+        )
         return answer
 
-    def ask_stream(self, question: str):
-        if self._stream_chain is None or self._current_language is None:
-            raise RuntimeError("No language selected. Call set_language() first.")
+    def ask_stream_events(self, question: str) -> Iterator[dict]:
+        language = self._require_ready()
         if not question.strip():
-            yield "Please enter a question."
+            yield {"type": "token", "token": "Please enter a question."}
             return
 
-        logger.debug("Streaming ask [%s]: %s", self._current_language, question)
+        started = time.perf_counter()
+        retrieval = self._hybrid_retriever.retrieve(question, language)
+        context = _format_docs(retrieval.chunks)
+        messages = _PROMPT.invoke({"context": context, "question": question}).to_messages()
+        generation_started = time.perf_counter()
+        answer_parts: list[str] = []
+        input_tokens = output_tokens = 0
+        ttft_ms = None
+        error = None
         try:
-            for chunk in self._stream_chain.stream(question):
-                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if self._demo_mode:
+                answer = self._demo_answer(question, retrieval)
+                stream = (part + " " for part in answer.split(" "))
+            else:
+                stream = self._llm.stream(messages)
+            for chunk in stream:
+                token = chunk if isinstance(chunk, str) else _content_text(chunk)
                 if token:
-                    yield token
+                    if ttft_ms is None:
+                        ttft_ms = (time.perf_counter() - generation_started) * 1000
+                    answer_parts.append(token)
+                    yield {"type": "token", "token": token}
+                if not isinstance(chunk, str):
+                    chunk_input, chunk_output = extract_token_usage(chunk)
+                    input_tokens = max(input_tokens, chunk_input)
+                    output_tokens = max(output_tokens, chunk_output)
         except Exception as exc:
-            logger.error("LLM streaming call failed: %s", exc)
-            yield f"\nError: {exc}\n"
+            logger.exception("LLM streaming call failed")
+            error = str(exc)
+            token = f"\n\nError: {exc}"
+            answer_parts.append(token)
+            yield {"type": "token", "token": token}
+
+        answer = "".join(answer_parts).strip()
+        estimated = not (input_tokens or output_tokens)
+        if estimated:
+            input_tokens = estimate_tokens(context + question)
+            output_tokens = estimate_tokens(answer)
+        trace = self._record_trace(
+            question=question,
+            retrieval=retrieval,
+            answer=answer,
+            started=started,
+            generation_started=generation_started,
+            ttft_ms=ttft_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usage_estimated=estimated,
+            error=error,
+        )
+        yield {"type": "trace", "trace": trace.as_dict(include_answer=False)}
+
+    def ask_stream(self, question: str) -> Iterator[str]:
+        for event in self.ask_stream_events(question):
+            if event["type"] == "token":
+                yield event["token"]

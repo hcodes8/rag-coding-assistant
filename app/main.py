@@ -55,12 +55,14 @@ def main() -> None:
     logger.info("Starting RAG-Coding-Assistant")
 
     from app.config import ensure_dirs
+    from app.demo import seed_demo_docs
     from app.gui import launch_gui
     from app.rag_pipeline import RAGPipeline
     from app.server import create_app
     from app.vector_store import VectorStoreManager
 
     ensure_dirs()
+    seed_demo_docs()
 
     HOST = "127.0.0.1"
     PORT = 5000
@@ -87,7 +89,7 @@ def main() -> None:
     server_thread = threading.Thread(target=_serve, daemon=True)
     server_thread.start()
 
-    if not _wait_for_server(f"http://{HOST}:{PORT}/"):
+    if not _wait_for_server(f"http://{HOST}:{PORT}/health"):
         logger.error("Server did not become ready in time")
         server.should_exit = True
         server_thread.join(timeout=5)

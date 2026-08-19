@@ -1,0 +1,6 @@
+{
+  "hit_rate@8": 0.6,
+  "mrr": 0.6,
+  "groundedness": 0.7,
+  "abstention_accuracy": 0.8
+}
