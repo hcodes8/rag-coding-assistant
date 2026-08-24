@@ -32,6 +32,25 @@ jobs:
           set -o pipefail
           pytest -q 2>&1 | tee pytest.log
 
+      - name: Run RAG quality gate
+        env:
+          DEMO_MODE: "true"
+          EMBEDDING_BACKEND: hash
+          RERANK_ENABLED: "false"
+        run: |
+          python -m app.evaluation.runner \
+            --dataset evals/demo.jsonl \
+            --thresholds evals/thresholds.json \
+            --output reports/evaluation.json
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-evaluation-report
+          path: reports/evaluation.json
+          if-no-files-found: ignore
+
       # failing output becomes one annotation, visible without downloading logs
       - name: Surface failures
         if: failure()
