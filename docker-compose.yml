@@ -1,0 +1,26 @@
+services:
+  rag-assistant:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-qwen/qwen3-next-80b-a3b-instruct:free}
+      LLM_INPUT_COST_PER_MILLION: ${LLM_INPUT_COST_PER_MILLION:-0}
+      LLM_OUTPUT_COST_PER_MILLION: ${LLM_OUTPUT_COST_PER_MILLION:-0}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-hash}
+      DOCS_DIR: /app/docs
+      CHROMA_DB_DIR: /app/chroma_db
+      DATA_DIR: /app/data
+    volumes:
+      - rag_docs:/app/docs
+      - rag_chroma:/app/chroma_db
+      - rag_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  rag_docs:
+  rag_chroma:
+  rag_data:
