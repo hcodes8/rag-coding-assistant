@@ -88,6 +88,39 @@ function copyToClipboard(text, btn) {
     });
 }
 
+function formatCost(value) {
+    if (!value) return '$0';
+    return value < 0.01 ? `$${value.toFixed(6)}` : `$${value.toFixed(3)}`;
+}
+
+async function loadObservability() {
+    try {
+        const response = await fetch(`${BASE}/api/observability/summary`);
+        const summary = await response.json();
+        $('obs-requests').textContent = summary.requests;
+        $('obs-latency').textContent = Math.round(summary.avg_latency_ms || 0);
+        $('obs-tokens').textContent = (summary.input_tokens + summary.output_tokens).toLocaleString();
+        $('obs-cost').textContent = formatCost(summary.estimated_cost_usd);
+    } catch { }
+}
+
+function attachTrace(container, meta, trace) {
+    const tokenLabel = `${trace.input_tokens + trace.output_tokens} tok${trace.token_usage_estimated ? '~' : ''}`;
+    meta.textContent += ` · ${Math.round(trace.total_ms)} ms · ${tokenLabel}`;
+    const strip = document.createElement('div');
+    strip.className = 'trace-strip';
+    const quality = trace.quality || {};
+    const sourceCount = new Set((trace.sources || []).map(source => source.source)).size;
+    strip.innerHTML = `
+      <span><b>${Math.round(trace.retrieval_ms)} ms</b> retrieve</span>
+      <span><b>${Math.round(trace.rerank_ms)} ms</b> rerank</span>
+      <span><b>${Math.round((quality.groundedness || 0) * 100)}%</b> grounded</span>
+      <span><b>${sourceCount}</b> sources</span>
+      <span><b>${formatCost(trace.estimated_cost_usd)}</b> cost</span>`;
+    container.appendChild(strip);
+    loadObservability();
+}
+
 async function loadLanguages() {
     try {
         const r = await fetch(`${BASE}/api/languages`);
@@ -203,6 +236,7 @@ async function sendQuestion() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question })
         });
+        if (!response.ok || !response.body) throw new Error(`request failed: ${response.status}`);
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -221,9 +255,13 @@ async function sendQuestion() {
                 if (raw === '[DONE]') { done = true; break; }
                 try {
                     const obj = JSON.parse(raw);
-                    fullText += obj.token;
-                    bubble.innerHTML = renderMarkdown(fullText) + '<span class="cursor"></span>';
-                    scrollBottom();
+                    if (obj.type === 'trace') {
+                        attachTrace(aDiv, meta, obj.trace);
+                    } else if (obj.type === 'token') {
+                        fullText += obj.token;
+                        bubble.innerHTML = renderMarkdown(fullText) + '<span class="cursor"></span>';
+                        scrollBottom();
+                    }
                 } catch { }
             }
         }
@@ -253,3 +291,4 @@ ta.addEventListener('keydown', e => {
 $('send-btn').addEventListener('click', sendQuestion);
 
 loadLanguages();
+loadObservability();
